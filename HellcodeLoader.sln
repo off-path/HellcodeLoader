@@ -13,6 +13,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Bins", "Bins", "{8EC462FD-D
 	ProjectSection(SolutionItems) = preProject
 		agent.dll = agent.dll
 		c2.py = c2.py
+		pe_to_shellcode.py = pe_to_shellcode.py
 		readme.md = readme.md
 	EndProjectSection
 EndProject
