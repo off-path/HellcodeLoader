@@ -1,0 +1,11 @@
+; masm file
+.model flat, c
+
+.code
+
+plus1 proc input:dword
+    mov eax, input
+    add eax, 1
+    ret
+plus1 endp
+     end
