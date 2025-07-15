@@ -2,7 +2,7 @@
 
 ## Overview
 
-HellCodeLoader is a student project focused on malware development (maldev) techniques. It demonstrates advanced process injection using indirect syscalls, Asynchronous Procedure Calls, reflective DLL loading, and a custom command-and-control (C2) web server. The project is modular, with each component fulfilling a specific role in the infection and control chain.
+HellCodeLoader is a student project focused on malware development (maldev) techniques made by 0xkylm and offpath. It demonstrates advanced process injection using indirect syscalls, Asynchronous Procedure Calls, reflective DLL loading, and a custom command-and-control (C2) web server. The project is modular, with each component fulfilling a specific role in the infection and control chain.
 
 ## Usage
 
@@ -221,3 +221,9 @@ When a command is received, the `CustomCommand` function parses the command stri
 If found, the corresponding handler is invoked with its arguments, otherwise, the command is ignored as unknown.
 
 This modular design makes it easy to extend the agent’s capabilities by adding new custom commands, supporting flexible and stealthy post-exploitation actions controlled remotely from the C2 server.
+
+
+### Author
+
+- https://github.com/off-path
+- https://github.com/0xkylm/
